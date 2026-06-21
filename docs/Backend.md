@@ -18,7 +18,7 @@ This repository serves as an **architectural showcase and design case study** of
 
 ## 🚀 Executive Summary
 
-The backend is built using **ASP.NET Core (C#)**, **Entity Framework Core**, and **PostgreSQL**. It acts as the core engine for ordering, inventory mappings, and client invoice generation for multiple independent organizations (tenants).
+The backend is built using **ASP.NET Core (C#)**, **Entity Framework Core**, and **PostgreSQL**. It acts as the core engine for ordering, inventory mappings, and order invoice generation for multiple independent organizations (tenants).
 
 Instead of treating the backend as a collection of CRUD controllers, the architecture prioritizes **security-by-default, transactional consistency, and strict boundary control**:
 *   **Preventing Cross-Tenant Data Leaks**: By automating tenant isolation at the ORM compilation layer, database queries are scoped implicitly—preventing catastrophic corporate data leaks.
@@ -52,7 +52,7 @@ All load tests were run against the API deployed on the following Oracle Cloud I
 The backend has been load-tested using **k6** against the most write-intensive endpoint (`POST /api/Order/Create`), which involves multi-table DB transactions.
 
 *   **Multi-Tenancy Scale**: Safely isolates and supports **50+ active client organizations (tenants)** sharing a single database instance.
-*   **Invoice Compilation Load**: Generates custom QuestPDF invoices on-demand with minimized memory overhead.
+*   **Invoice Compilation Load**: Generates custom QuestPDF order invoices on-demand with minimized memory overhead.
 
 > [!IMPORTANT]
 > All numbers below reflect tests conducted on the **dev/staging server specified above**. Production hardware will yield significantly higher throughput.
@@ -218,12 +218,12 @@ During development, several key technical trade-offs were evaluated. Below are t
 ### 1. PostgreSQL vs. Microsoft SQL Server
 *   **The Options**: MS SQL Server is the traditional enterprise .NET choice, while PostgreSQL is the open-source industry standard.
 *   **The Trade-off**: MS SQL Server provides seamless out-of-the-box integration with .NET but carries high hosting licensing costs (particularly in cloud environments) and high resource overhead. PostgreSQL is lightweight and runs easily in Linux Docker containers.
-*   **The Decision**: **PostgreSQL** was chosen. In addition to licensing savings, PostgreSQL offers first-class `JSONB` data indexing (which we utilized for storing structured log details from Serilog) and seamless Docker deployment.
+*   **The Decision**: **PostgreSQL** was chosen. In addition to licensing savings, PostgreSQL offers first-class `JSONB` data indexing (which is used for storing structured log details from Serilog) and seamless Docker deployment.
 
 ### 2. EF Core Query Filters vs. Database Row-Level Security (RLS)
 *   **The Options**: Implementing tenant separation at the database engine level (RLS policies) vs. application level (EF Core Global Filters).
 *   **The Trade-off**: RLS provides absolute security (even raw SQL users are constrained). However, it couples the application tightly to a specific database engine, increases migration complexity, and makes local automated unit testing (using in-memory or SQLite providers) highly difficult.
-*   **The Decision**: **EF Core Global Query Filters**. This isolates tenant logic inside C# code. This keeps our database schema database-agnostic and simplifies unit testing, as the mock DB context automatically inherits security filters without setting up RLS database users in tests.
+*   **The Decision**: **EF Core Global Query Filters**. This isolates tenant logic inside C# code. This keeps the database schema database-agnostic and simplifies unit testing, as the mock DB context automatically inherits security filters without setting up RLS database users in tests.
 
 ### 3. Database Logging Sink vs. External Log Aggregator (Elastic/Splunk)
 *   **The Options**: Logging to a local PostgreSQL table vs. writing to structured JSON files or shipping logs directly to a cloud provider (like Elasticsearch or Datadog).
@@ -236,7 +236,7 @@ During development, several key technical trade-offs were evaluated. Below are t
 
 ### Challenge 1: Concurrency and Race Conditions in Sequential Order Numbering
 *   **The Problem**: Sequential order numbers (e.g. `ORD-000001`) must be generated sequentially per tenant. Under high concurrent workloads (multiple sales reps submitting orders at the exact same millisecond), application-level sequence calculations resulted in lock contention or duplicate order numbers.
-*   **The Solution**: We offloaded generation to a database-level PL/pgSQL function. By leveraging row-level locking (`SELECT ... FOR UPDATE`) on a dedicated `ORDER_COUNTER` table, PostgreSQL serializes sequence increments safely within the database transaction, eliminating duplicates under heavy concurrent write operations:
+*   **The Solution**: Generation was offloaded to a database-level PL/pgSQL function. By leveraging row-level locking (`SELECT ... FOR UPDATE`) on a dedicated `ORDER_COUNTER` table, PostgreSQL serializes sequence increments safely within the database transaction, eliminating duplicates under heavy concurrent write operations:
     ```sql
     UPDATE "ORDER_COUNTER"
     SET "LASTGENERATED_NUMBER" = "LASTGENERATED_NUMBER" + 1
@@ -245,13 +245,13 @@ During development, several key technical trade-offs were evaluated. Below are t
     ```
 
 ### Challenge 2: Cross-Platform Document Rendering Crash
-*   **The Problem**: Invoices are generated as PDFs using the QuestPDF library, which relies on native font rendering. During deployment inside Linux Docker containers, invoice generation crashed immediately because native Windows fonts (`Times New Roman`) were missing from the host OS.
-*   **The Solution**: We bundled the required `.TTF` font files inside the project (`wwwroot/fonts/`) and configured manual font registration during application startup:
+*   **The Problem**: Order invoices are generated as PDFs using the QuestPDF library, which relies on native font rendering. During deployment inside Linux Docker containers, order invoice generation crashed immediately because native Windows fonts (`Times New Roman`) were missing from the host OS.
+*   **The Solution**: The required `.TTF` font files were bundled into the project (`wwwroot/fonts/`) and configured manual font registration during application startup:
     ```csharp
     var env = app.Services.GetRequiredService<IWebHostEnvironment>();
     FontManager.RegisterFont(File.OpenRead(Path.Combine(env.WebRootPath, "fonts", "TIMES.TTF")));
     ```
-    This removed OS dependencies and guaranteed identical PDF invoice rendering across local Windows machines, development servers, and production Docker environments.
+    This removed OS dependencies and guaranteed identical order invoice rendering across local Windows machines, development servers, and production Docker environments.
 
 ### Challenge 3: Thread Pool Starvation & DB Lock Contention Under Concurrent Load
 *   **The Problem**: Load testing at 30+ concurrent users revealed two distinct failure modes:
